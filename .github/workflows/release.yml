@@ -133,17 +133,35 @@ jobs:
           TARGET: ${{ inputs.target }}
         run: |
           TYPE="$INPUT_TYPE"
+
+          # Auto-detect unless explicitly overridden (via chain or user input != regular)
           if [[ "$TYPE" == "regular" || -z "$TYPE" ]]; then
-            if [[ "$TARGET" == "stg" ]]; then
-              case "$FROM" in
-                hotfix/*)  TYPE="hotfix" ;;
-                release/*) TYPE="cherrypick" ;;
-                *)         TYPE="regular" ;;
-              esac
-            fi
+            case "$TARGET" in
+              stg)
+                # From the `from` branch prefix
+                case "$FROM" in
+                  hotfix/*)  TYPE="hotfix" ;;
+                  release/*) TYPE="cherrypick" ;;
+                  *)         TYPE="regular" ;;
+                esac
+                ;;
+              prod-build|prod-deploy)
+                # RC tag is lightweight → inspect which branch contains it
+                RC_SHA=$(git rev-parse --verify "refs/tags/$FROM" 2>/dev/null || true)
+                if [[ -n "$RC_SHA" ]]; then
+                  BRANCHES=$(git branch -r --contains "$RC_SHA" 2>/dev/null || true)
+                  if echo "$BRANCHES" | grep -qE '^\s*origin/hotfix/'; then
+                    TYPE="hotfix"
+                  elif echo "$BRANCHES" | grep -qE '^\s*origin/release/'; then
+                    TYPE="cherrypick"
+                  fi
+                fi
+                ;;
+            esac
           fi
+
           echo "type=$TYPE" >> "$GITHUB_OUTPUT"
-          echo "Release type: $TYPE"
+          echo "Release type: $TYPE (target=$TARGET, from=$FROM)"
 
       - name: Resolve environment config
         id: env
