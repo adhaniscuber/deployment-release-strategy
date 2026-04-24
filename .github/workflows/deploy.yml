@@ -45,12 +45,11 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ENV: ${{ inputs.environment }}
         run: |
-          # Cari deployment terakhir untuk env yang sama (state = success)
           PREV_SHA=$(gh api "repos/${{ github.repository }}/deployments?environment=${ENV}&per_page=10" \
             --jq '[.[] | select(.sha != null)] | .[0].sha // ""')
 
           if [[ -z "$PREV_SHA" ]]; then
-            echo "No previous deployment for ${ENV}, showing last 10 commits"
+            echo "No previous deployment for ${ENV}"
             echo "has_prev=false" >> $GITHUB_OUTPUT
             echo "prev_sha=" >> $GITHUB_OUTPUT
           else
@@ -65,41 +64,37 @@ jobs:
           HAS_PREV: ${{ steps.prev.outputs.has_prev }}
           PREV_SHA: ${{ steps.prev.outputs.prev_sha }}
         run: |
-          if [[ "$HAS_PREV" == "true" ]]; then
-            # Cek kalau PREV_SHA masih ada di history (bisa hilang kalau di-rebase/force-push)
-            if git cat-file -e "$PREV_SHA" 2>/dev/null; then
-              RANGE="${PREV_SHA}..HEAD"
-              HEADER="## Changes since last deploy (${PREV_SHA:0:7}..$(git rev-parse --short HEAD)):"
-            else
-              RANGE="HEAD~10..HEAD"
-              HEADER="## Changes (last 10 commits — previous deploy SHA not reachable):"
-            fi
+          if [[ "$HAS_PREV" == "true" ]] && git cat-file -e "$PREV_SHA" 2>/dev/null; then
+            # Previous deploy SHA ada di history → range diff
+            CHANGELOG=$(git log "${PREV_SHA}..HEAD" --no-merges --pretty=format:"- \`%h\` %s (@%an)")
+            HEADER="## Changes since last deploy (${PREV_SHA:0:7}..$(git rev-parse --short HEAD)):"
           else
-            RANGE="HEAD~10..HEAD"
-            HEADER="## Changes (last 10 commits — no previous deploy):"
+            # Fallback: last 10 commits (pakai --max-count, aman kalau repo commit < 10)
+            CHANGELOG=$(git log --max-count=10 --no-merges --pretty=format:"- \`%h\` %s (@%an)")
+            if [[ "$HAS_PREV" == "true" ]]; then
+              HEADER="## Changes (last 10 commits — previous deploy SHA not reachable):"
+            else
+              HEADER="## Changes (last 10 commits — no previous deploy):"
+            fi
           fi
 
-          CHANGELOG=$(git log "$RANGE" --no-merges --pretty=format:"- \`%h\` %s (@%an)")
+          [[ -z "$CHANGELOG" ]] && CHANGELOG="_No new commits since last deploy._"
 
-          if [[ -z "$CHANGELOG" ]]; then
-            CHANGELOG="_No new commits since last deploy._"
-          fi
-
-          # Output ke step summary (akan ter-render bagus di Actions UI)
+          # Render di Actions Summary tab
           {
             echo "${HEADER}"
             echo ""
             echo "${CHANGELOG}"
           } >> $GITHUB_STEP_SUMMARY
 
-          # Echo ke console log juga (untuk logs view)
+          # Echo ke step log
           echo ""
           echo "${HEADER}"
           echo ""
           echo "${CHANGELOG}"
           echo ""
 
-          # Simpan untuk step lain (escape multiline)
+          # Simpan output multiline untuk step lain
           {
             echo "body<<CHANGELOG_EOF"
             echo "${HEADER}"
@@ -108,8 +103,7 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> $GITHUB_OUTPUT
 
-          # Count commits
-          COUNT=$(echo "${CHANGELOG}" | grep -c '^- ' || echo 0)
+          COUNT=$(echo "${CHANGELOG}" | grep -c '^- ' || true)
           echo "count=${COUNT}" >> $GITHUB_OUTPUT
 
       - name: Create deployment record
@@ -139,12 +133,15 @@ jobs:
 
       - name: Mark in_progress
         uses: actions/github-script@v7
+        env:
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
         with:
           script: |
+            if (!process.env.DEPLOYMENT_ID) return;
             await github.rest.repos.createDeploymentStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              deployment_id: ${{ steps.deployment.outputs.id }},
+              deployment_id: parseInt(process.env.DEPLOYMENT_ID),
               state: 'in_progress',
               description: 'Deployment started',
               log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
@@ -167,12 +164,14 @@ jobs:
         uses: actions/github-script@v7
         env:
           ENV: ${{ inputs.environment }}
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
         with:
           script: |
+            if (!process.env.DEPLOYMENT_ID) return;
             await github.rest.repos.createDeploymentStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              deployment_id: ${{ steps.deployment.outputs.id }},
+              deployment_id: parseInt(process.env.DEPLOYMENT_ID),
               state: 'success',
               description: 'Deployment successful',
               environment_url: `https://example.com/${process.env.ENV}`,
@@ -182,12 +181,18 @@ jobs:
       - name: Mark failure
         if: failure()
         uses: actions/github-script@v7
+        env:
+          DEPLOYMENT_ID: ${{ steps.deployment.outputs.id }}
         with:
           script: |
+            if (!process.env.DEPLOYMENT_ID) {
+              console.log('No deployment record to update (failed before creation)');
+              return;
+            }
             await github.rest.repos.createDeploymentStatus({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              deployment_id: ${{ steps.deployment.outputs.id }},
+              deployment_id: parseInt(process.env.DEPLOYMENT_ID),
               state: 'failure',
               description: 'Deployment failed',
               log_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
