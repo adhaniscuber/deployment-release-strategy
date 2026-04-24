@@ -1,0 +1,9 @@
+# Production approvers — used by:
+#   • on-approve.yml  — /approve and /reject on pending-prod-deploy issues
+#   • release.yml     — target=rollback authorization guard
+#
+# Only the `production` list is consulted.
+# Usernames must match GitHub login case-sensitively.
+
+production:
+  - adhaniscuber

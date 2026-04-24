@@ -1,0 +1,153 @@
+# DEMO: prepare-branch.yml (adapted from voila-pos-web v6)
+# Creates hotfix/vX.Y.Z or release/vX.Y.Z branch from latest GA tag.
+name: Prepare Branch
+
+run-name: "PREPARE-${{ inputs.kind == 'hotfix' && 'HOTFIX' || 'RELEASE' }} | base=${{ inputs.base != '' && inputs.base || 'auto' }} | by:${{ github.actor }}"
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        description: "Branch kind — hotfix (patch bump) or release (minor bump)"
+        required: true
+        type: choice
+        options:
+          - hotfix
+          - release
+      base:
+        description: "Base ref (default: auto-detect latest GA tag). Use 'main' for first release."
+        required: false
+        type: string
+        default: ""
+      force:
+        description: "If branch exists: delete and recreate (DESTRUCTIVE)"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: "Prepare ${{ inputs.kind }} branch"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Resolve base ref
+        id: base
+        env:
+          INPUT_BASE: ${{ inputs.base }}
+        run: |
+          if [[ -n "$INPUT_BASE" ]]; then
+            if ! git rev-parse --verify "$INPUT_BASE" >/dev/null 2>&1; then
+              echo "::error::Base ref '$INPUT_BASE' does not exist"
+              exit 1
+            fi
+            BASE="$INPUT_BASE"
+            echo "✅ Base: $BASE (from input)"
+          else
+            BASE=$(git tag -l 'v*' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | sort -V \
+              | tail -1)
+            if [[ -z "$BASE" ]]; then
+              echo "::error::No plain-semver GA tag found (vX.Y.Z pattern)"
+              echo "Options: run with base=main, or base=<existing-tag>"
+              exit 1
+            fi
+            echo "✅ Base: $BASE (auto-detected latest GA)"
+          fi
+          echo "ref=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Compute target version
+        id: version
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+          KIND: ${{ inputs.kind }}
+        run: |
+          VERSION="${BASE#v}"
+          VERSION="${VERSION%%-*}"
+
+          if [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            MAJOR=$(echo "$VERSION" | cut -d. -f1)
+            MINOR=$(echo "$VERSION" | cut -d. -f2)
+            PATCH=$(echo "$VERSION" | cut -d. -f3)
+          else
+            echo "ℹ️  Base '$BASE' not a version tag → starting from v0.0.0"
+            MAJOR=0; MINOR=0; PATCH=0
+          fi
+
+          case "$KIND" in
+            hotfix)  TARGET="v${MAJOR}.${MINOR}.$((PATCH + 1))" ;;
+            release) TARGET="v${MAJOR}.$((MINOR + 1)).0" ;;
+          esac
+
+          BRANCH="${KIND}/${TARGET}"
+          echo "Target: $TARGET | Branch: $BRANCH"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Handle existing branch
+        env:
+          BRANCH: ${{ steps.version.outputs.branch }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          if git show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
+            if [[ "$FORCE" == "true" ]]; then
+              echo "::warning::Deleting existing $BRANCH"
+              git push origin --delete "$BRANCH"
+            else
+              echo "::error::Branch $BRANCH exists. Use force=true to recreate."
+              exit 1
+            fi
+          else
+            echo "✅ $BRANCH does not exist — proceeding"
+          fi
+
+      - name: Create and push branch
+        env:
+          BASE: ${{ steps.base.outputs.ref }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          ACTOR: ${{ github.actor }}
+          ACTOR_ID: ${{ github.actor_id }}
+        run: |
+          git config user.name "$ACTOR"
+          git config user.email "${ACTOR_ID}+${ACTOR}@users.noreply.github.com"
+          git checkout -b "$BRANCH" "$BASE"
+          git push origin "$BRANCH"
+          echo "✅ Created $BRANCH from $BASE"
+
+      - name: Summary
+        env:
+          KIND: ${{ inputs.kind }}
+          BASE: ${{ steps.base.outputs.ref }}
+          TARGET: ${{ steps.version.outputs.target }}
+          BRANCH: ${{ steps.version.outputs.branch }}
+          ACTOR: ${{ github.actor }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+        run: |
+          {
+            echo "# ✅ Branch \`$BRANCH\` created"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Kind | $KIND |"
+            echo "| Base | \`$BASE\` |"
+            echo "| Target version | \`$TARGET\` |"
+            echo "| Branch | [\`$BRANCH\`]($SERVER/$REPO/tree/$BRANCH) |"
+            echo "| Created by | @$ACTOR |"
+            echo ""
+            echo "## Next step"
+            echo ""
+            echo "Dispatch **Release** → target=stg, from=\`$BRANCH\`"
+          } >> "$GITHUB_STEP_SUMMARY"

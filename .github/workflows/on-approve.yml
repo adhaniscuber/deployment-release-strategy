@@ -1,0 +1,239 @@
+# DEMO: on-approve.yml v3 (adapted from voila-pos-web v6)
+# Handle /approve and /reject on `pending-prod-deploy` issues.
+name: Approval Handler
+
+run-name: >-
+  ${{
+    startsWith(github.event.comment.body, '/approve') &&
+      format('APPROVED | {0} | by:{1}',
+        github.event.issue.title,
+        github.event.comment.user.login)
+    || startsWith(github.event.comment.body, '/reject') &&
+      format('REJECTED | {0} | by:{1}',
+        github.event.issue.title,
+        github.event.comment.user.login)
+    || 'ignored'
+  }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+  contents: read
+  actions: write
+
+jobs:
+  handle:
+    name: "Handle /approve or /reject"
+    if: |
+      github.event.issue.state == 'open' &&
+      !github.event.issue.pull_request &&
+      contains(github.event.issue.labels.*.name, 'pending-prod-deploy') &&
+      (
+        startsWith(github.event.comment.body, '/approve') ||
+        startsWith(github.event.comment.body, '/reject')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Parse comment
+        id: cmd
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          FIRST_LINE=$(echo "$BODY" | head -n 1 | tr -d '\r')
+          if [[ "$FIRST_LINE" =~ ^/approve([[:space:]]|$) ]]; then
+            echo "command=approve" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+          elif [[ "$FIRST_LINE" =~ ^/reject([[:space:]]+(.+))?$ ]]; then
+            echo "command=reject" >> "$GITHUB_OUTPUT"
+            REASON="${BASH_REMATCH[2]:-no reason given}"
+            {
+              echo "reason<<REASON_EOF"
+              echo "$REASON"
+              echo "REASON_EOF"
+            } >> "$GITHUB_OUTPUT"
+          else
+            echo "command=none" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github
+
+      - name: Authorize commenter
+        id: auth
+        env:
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          if [[ ! -f .github/approvers.yml ]]; then
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+            echo "reason=approvers.yml not found" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          APPROVED=false
+          while IFS= read -r line; do
+            name=$(echo "$line" | sed -E 's/^[[:space:]]*-[[:space:]]*//' | tr -d ' ')
+            [[ "$name" == "$ACTOR" ]] && APPROVED=true && break
+          done < <(awk '/^production:/{flag=1; next} /^[a-z]/{flag=0} flag' .github/approvers.yml)
+
+          if [[ "$APPROVED" == "true" ]]; then
+            echo "authorized=true" >> "$GITHUB_OUTPUT"
+            echo "@$ACTOR is authorized"
+          else
+            echo "authorized=false" >> "$GITHUB_OUTPUT"
+            echo "reason=@$ACTOR not in production approvers list" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment unauthorized
+        if: steps.auth.outputs.authorized == 'false'
+        uses: actions/github-script@v7
+        env:
+          REASON: ${{ steps.auth.outputs.reason }}
+          COMMAND: ${{ steps.cmd.outputs.command }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        with:
+          script: |
+            const body = [
+              `⛔ @${process.env.ACTOR} not authorized to \`/${process.env.COMMAND}\` production deployments.`,
+              ``,
+              `Reason: ${process.env.REASON}`,
+              ``,
+              `Authorized approvers: see \`.github/approvers.yml\` under \`production:\`.`
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Stop if unauthorized
+        if: steps.auth.outputs.authorized == 'false'
+        run: exit 0
+
+      - name: Parse release metadata from issue
+        id: meta
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          META=$(echo "$ISSUE_BODY" | awk '/<!-- release-meta/{flag=1; next} /-->/{flag=0} flag')
+          RC_TAG=$(echo "$META" | grep -E '^rc_tag:' | head -1 | cut -d: -f2- | tr -d ' \r')
+          GA_TAG=$(echo "$META" | grep -E '^ga_tag:' | head -1 | cut -d: -f2- | tr -d ' \r')
+          RELEASE_TYPE=$(echo "$META" | grep -E '^release_type:' | head -1 | cut -d: -f2- | tr -d ' \r')
+          RELEASE_TYPE="${RELEASE_TYPE:-regular}"
+
+          if [[ -z "$RC_TAG" ]]; then
+            echo "::error::Issue body missing 'rc_tag' in release-meta block"
+            exit 1
+          fi
+
+          {
+            echo "rc_tag=$RC_TAG"
+            echo "ga_tag=$GA_TAG"
+            echo "release_type=$RELEASE_TYPE"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Parsed: rc_tag=$RC_TAG · release_type=$RELEASE_TYPE"
+
+      - name: Handle /reject
+        if: steps.auth.outputs.authorized == 'true' && steps.cmd.outputs.command == 'reject'
+        uses: actions/github-script@v7
+        env:
+          REASON: ${{ steps.cmd.outputs.reason }}
+          APPROVER: ${{ github.event.comment.user.login }}
+          RC_TAG: ${{ steps.meta.outputs.rc_tag }}
+        with:
+          script: |
+            const ts = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
+            const body = [
+              `🚫 **Rejected** by @${process.env.APPROVER} at ${ts}`,
+              ``,
+              `**Reason:** ${process.env.REASON}`,
+              ``,
+              `RC tag \`${process.env.RC_TAG}\` is kept — re-cut is possible.`
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              state: 'closed',
+              state_reason: 'not_planned',
+            });
+
+      - name: Handle /approve — dispatch prod-deploy
+        if: steps.auth.outputs.authorized == 'true' && steps.cmd.outputs.command == 'approve'
+        uses: actions/github-script@v7
+        env:
+          RC_TAG: ${{ steps.meta.outputs.rc_tag }}
+          RELEASE_TYPE: ${{ steps.meta.outputs.release_type }}
+          APPROVER: ${{ github.event.comment.user.login }}
+        with:
+          script: |
+            const { RC_TAG, RELEASE_TYPE, APPROVER } = process.env;
+
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'release.yml',
+              ref: 'main',
+              inputs: {
+                target: 'prod-deploy',
+                from: RC_TAG,
+                bump: 'patch',
+                release_type: RELEASE_TYPE,
+                triggered_by: APPROVER,
+              },
+            });
+
+            console.log(`Dispatched release.yml target=prod-deploy from=${RC_TAG} by=${APPROVER}`);
+
+            const ts = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
+            const body = [
+              `✅ **Approved** by @${APPROVER} at ${ts}`,
+              ``,
+              `Dispatched \`release.yml\` target=\`prod-deploy\` from=\`${RC_TAG}\`.`,
+              ``,
+              `This issue will auto-close on success.`
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Summary
+        if: always()
+        env:
+          COMMAND: ${{ steps.cmd.outputs.command }}
+          AUTHORIZED: ${{ steps.auth.outputs.authorized }}
+          AUTH_REASON: ${{ steps.auth.outputs.reason }}
+          RC_TAG: ${{ steps.meta.outputs.rc_tag }}
+          APPROVER: ${{ github.event.comment.user.login }}
+        run: |
+          {
+            echo "## Approval handler run"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Command | \`/$COMMAND\` |"
+            echo "| Commenter | @$APPROVER |"
+            echo "| Authorized | $AUTHORIZED |"
+            [[ "$AUTHORIZED" == "false" ]] && echo "| Refusal reason | $AUTH_REASON |"
+            echo "| RC tag | \`$RC_TAG\` |"
+            echo "| Issue | [#${{ github.event.issue.number }}](${{ github.event.issue.html_url }}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
