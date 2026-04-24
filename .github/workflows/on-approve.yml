@@ -24,7 +24,7 @@ on:
 
 permissions:
   issues: write
-  contents: read
+  contents: write       # needed for createDispatchEvent (repository_dispatch trigger)
   actions: write
 
 jobs:
