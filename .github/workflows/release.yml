@@ -834,6 +834,9 @@ jobs:
       && needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout (needed for gh CLI repo context)
+        uses: actions/checkout@v4
+
       - name: Identify current latest Release
         id: versions
         env:
