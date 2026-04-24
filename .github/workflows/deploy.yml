@@ -1,6 +1,10 @@
 name: Deploy Demo
 run-name: "${{ inputs.environment }} | ref=${{ inputs.ref }} | by:${{ github.actor }}"
 
+env:
+  # Opt into Node.js 24 early (v20 deprecated, removed Sept 2026)
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   workflow_dispatch:
     inputs:
