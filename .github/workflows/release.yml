@@ -847,7 +847,7 @@ jobs:
             --jq '[.[] | select(.isDraft == false and .isLatest == true)] | .[0].tagName // ""')
           echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
 
-      - name: Annotate Releases with rollback notes
+      - name: Annotate Releases + promote target to Latest
         if: steps.versions.outputs.current != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -857,6 +857,7 @@ jobs:
         run: |
           TS=$(date -u '+%Y-%m-%d %H:%M UTC')
 
+          # Annotate the problematic release
           EXISTING=$(gh release view "$CURRENT" --json body --jq '.body')
           gh release edit "$CURRENT" --notes "$EXISTING
 
@@ -864,14 +865,17 @@ jobs:
 
           ⚠️ **Rolled back to \`$ROLLBACK_TO\`** at $TS by @$TRIGGERED_BY"
 
+          # Annotate the restored release + mark as Latest (reflects prod reality)
           EXISTING=$(gh release view "$ROLLBACK_TO" --json body --jq '.body')
-          gh release edit "$ROLLBACK_TO" --notes "$EXISTING
+          gh release edit "$ROLLBACK_TO" \
+            --latest \
+            --notes "$EXISTING
 
           ---
 
           🔄 **Re-activated via rollback** at $TS by @$TRIGGERED_BY (rolled back from \`$CURRENT\`)"
 
-          echo "::notice::Annotated both releases"
+          echo "::notice::Annotated both releases + marked $ROLLBACK_TO as Latest"
 
   # ================================================================
   # NOTIFY
