@@ -187,7 +187,14 @@ jobs:
           case "$TARGET" in
             dev)
               REF="${FROM:-main}"
-              SHORT_SHA=$(git rev-parse --short=7 "$REF")
+              # Fall back to origin/ prefix if ref not local
+              RESOLVED=$(git rev-parse --verify "$REF" 2>/dev/null \
+                || git rev-parse --verify "origin/$REF" 2>/dev/null)
+              if [[ -z "$RESOLVED" ]]; then
+                echo "::error::Cannot resolve ref: $REF"
+                exit 1
+              fi
+              SHORT_SHA=$(git rev-parse --short=7 "$RESOLVED")
               IMAGE_TAG="dev-${SHORT_SHA}-arm"
               ;;
             stg)
@@ -268,10 +275,17 @@ jobs:
           FROM: ${{ inputs.from }}
         run: |
           REF="${FROM:-main}"
-          SHA=$(git rev-parse "$REF")
-          SHORT_SHA=$(git rev-parse --short=7 "$REF")
+          # Try local ref first, fall back to origin/ prefix
+          SHA=$(git rev-parse --verify "$REF" 2>/dev/null \
+            || git rev-parse --verify "origin/$REF" 2>/dev/null)
+          if [[ -z "$SHA" ]]; then
+            echo "::error::Cannot resolve ref: $REF"
+            exit 1
+          fi
+          SHORT_SHA=$(git rev-parse --short=7 "$SHA")
           echo "commit_sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved $REF → $SHA"
 
       - name: "Guard · GA tag must not exist (prod-deploy)"
         if: inputs.target == 'prod-deploy'
