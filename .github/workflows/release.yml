@@ -246,8 +246,8 @@ jobs:
           case "$TARGET" in
             dev)
               REF="${FROM:-main}"
-              RESOLVED=$(git rev-parse --verify "$REF" 2>/dev/null \
-                || git rev-parse --verify "origin/$REF" 2>/dev/null)
+              RESOLVED=$(git rev-parse --verify "$REF^{commit}" 2>/dev/null \
+                || git rev-parse --verify "origin/$REF^{commit}" 2>/dev/null)
               if [[ -z "$RESOLVED" ]]; then
                 echo "::error::Cannot resolve ref: $REF"
                 exit 1
@@ -336,8 +336,11 @@ jobs:
           FROM: ${{ steps.event.outputs.from }}
         run: |
           REF="${FROM:-main}"
-          SHA=$(git rev-parse --verify "$REF" 2>/dev/null \
-            || git rev-parse --verify "origin/$REF" 2>/dev/null)
+          # ^{commit} dereferences annotated tags to their underlying commit.
+          # Without it, git rev-parse on annotated tags returns the tag object OID
+          # (not a commit), which GitHub Deployments API rejects.
+          SHA=$(git rev-parse --verify "$REF^{commit}" 2>/dev/null \
+            || git rev-parse --verify "origin/$REF^{commit}" 2>/dev/null)
           if [[ -z "$SHA" ]]; then
             echo "::error::Cannot resolve ref: $REF"
             exit 1
