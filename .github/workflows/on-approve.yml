@@ -174,7 +174,7 @@ jobs:
               state_reason: 'not_planned',
             });
 
-      - name: Handle /approve — dispatch prod-deploy
+      - name: Handle /approve — dispatch prod-deploy via repository_dispatch
         if: steps.auth.outputs.authorized == 'true' && steps.cmd.outputs.command == 'approve'
         uses: actions/github-script@v7
         env:
@@ -185,15 +185,15 @@ jobs:
           script: |
             const { RC_TAG, RELEASE_TYPE, APPROVER } = process.env;
 
-            await github.rest.actions.createWorkflowDispatch({
+            // Use repository_dispatch so release_type + triggered_by travel via
+            // client_payload (invisible) instead of as workflow_dispatch inputs (visible in form).
+            await github.rest.repos.createDispatchEvent({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'release.yml',
-              ref: 'main',
-              inputs: {
+              event_type: 'release',
+              client_payload: {
                 target: 'prod-deploy',
                 from: RC_TAG,
-                bump: 'patch',
                 release_type: RELEASE_TYPE,
                 triggered_by: APPROVER,
               },

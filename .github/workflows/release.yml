@@ -1,42 +1,40 @@
-# DEMO: release.yml v3 (adapted from voila-pos-web v6)
-# Build/deploy are SIMULATED (echo + sleep). Everything else is real:
-# tag creation, GitHub Deployments API, changelog, issue, Release.
+# DEMO: release.yml v4 — dual trigger (workflow_dispatch + repository_dispatch)
+#
+# User-facing dispatch form has 3 fields: target, from, bump.
+# Chain dispatch (from on-approve.yml) uses repository_dispatch with
+# client_payload → release_type and triggered_by pass invisibly.
 name: Release
 
 run-name: >-
   ${{
-    inputs.target == 'rollback' &&
+    github.event_name == 'repository_dispatch' &&
+      format('{0} | from={1} | by:{2} | action: {3}{4}',
+        github.event.client_payload.release_type == 'hotfix' && 'HOTFIX' || 'PROD',
+        github.event.client_payload.from,
+        github.event.client_payload.triggered_by,
+        github.event.client_payload.target == 'prod-deploy' && 'DEPLOY' || 'BUILD',
+        github.event.client_payload.release_type == 'cherrypick' && ' | mode: CHERRYPICK' || '')
+    || inputs.target == 'rollback' &&
       format('ROLLBACK | from={0} | by:{1} | action: ROLLBACK',
-        inputs.from,
-        inputs.triggered_by != '' && inputs.triggered_by || github.actor)
+        inputs.from, github.actor)
     || (inputs.target == 'stg' && startsWith(inputs.from, 'hotfix/')) &&
       format('HOTFIX | from={0} | by:{1}',
-        inputs.from,
-        inputs.triggered_by != '' && inputs.triggered_by || github.actor)
+        inputs.from, github.actor)
     || (inputs.target == 'stg' && startsWith(inputs.from, 'release/')) &&
       format('STG | from={0} | by:{1} | mode: CHERRYPICK',
-        inputs.from,
-        inputs.triggered_by != '' && inputs.triggered_by || github.actor)
+        inputs.from, github.actor)
     || inputs.target == 'dev' &&
       format('DEV | from={0} | by:{1}',
-        inputs.from != '' && inputs.from || 'main',
-        inputs.triggered_by != '' && inputs.triggered_by || github.actor)
+        inputs.from != '' && inputs.from || 'main', github.actor)
     || inputs.target == 'stg' &&
       format('STG | from={0} | by:{1}',
-        inputs.from != '' && inputs.from || 'main',
-        inputs.triggered_by != '' && inputs.triggered_by || github.actor)
+        inputs.from != '' && inputs.from || 'main', github.actor)
     || inputs.target == 'prod-build' &&
-      format('{0} | from={1} | by:{2} | action: BUILD{3}',
-        inputs.release_type == 'hotfix' && 'HOTFIX' || 'PROD',
-        inputs.from,
-        inputs.triggered_by != '' && inputs.triggered_by || github.actor,
-        inputs.release_type == 'cherrypick' && ' | mode: CHERRYPICK' || '')
+      format('PROD | from={0} | by:{1} | action: BUILD',
+        inputs.from, github.actor)
     || inputs.target == 'prod-deploy' &&
-      format('{0} | from={1} | by:{2} | action: DEPLOY{3}',
-        inputs.release_type == 'hotfix' && 'HOTFIX' || 'PROD',
-        inputs.from,
-        inputs.triggered_by != '' && inputs.triggered_by || github.actor,
-        inputs.release_type == 'cherrypick' && ' | mode: CHERRYPICK' || '')
+      format('PROD | from={0} | by:{1} | action: DEPLOY',
+        inputs.from, github.actor)
     || 'Release run'
   }}
 
@@ -70,19 +68,13 @@ on:
           - minor
           - major
         default: patch
-      release_type:
-        description: "Release type (auto-populated in chain)"
-        required: false
-        type: string
-        default: regular
-      triggered_by:
-        description: "Real user (auto-populated)"
-        required: false
-        type: string
-        default: ""
+  # Chain trigger from on-approve.yml. client_payload shape:
+  #   { target, from, release_type, triggered_by }
+  repository_dispatch:
+    types: [release]
 
 concurrency:
-  group: release-${{ inputs.target }}
+  group: release-${{ github.event_name == 'repository_dispatch' && github.event.client_payload.target || inputs.target }}
   cancel-in-progress: false
 
 permissions:
@@ -93,12 +85,16 @@ permissions:
 
 jobs:
   # ================================================================
-  # SETUP
+  # SETUP — parse event, resolve config, compute version, classify
   # ================================================================
   setup:
-    name: "Setup · classify & resolve ${{ inputs.target }}"
+    name: "Setup · classify & resolve"
     runs-on: ubuntu-latest
     outputs:
+      target: ${{ steps.event.outputs.target }}
+      from: ${{ steps.event.outputs.from }}
+      bump: ${{ steps.event.outputs.bump }}
+      triggered_by: ${{ steps.event.outputs.triggered_by }}
       app_env: ${{ steps.env.outputs.app_env }}
       deployment_env: ${{ steps.env.outputs.deployment_env }}
       version: ${{ steps.version.outputs.version }}
@@ -108,7 +104,6 @@ jobs:
       commit_sha: ${{ steps.resolve.outputs.commit_sha }}
       short_sha: ${{ steps.resolve.outputs.short_sha }}
       release_type: ${{ steps.release_type.outputs.type }}
-      triggered_by: ${{ steps.actor.outputs.actor }}
     steps:
       - name: Checkout (full history)
         uses: actions/checkout@v4
@@ -116,29 +111,63 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Determine triggered_by
-        id: actor
+      # -----------------------------------------------------------------
+      # Parse dispatch event — unify workflow_dispatch + repository_dispatch
+      # -----------------------------------------------------------------
+      - name: Parse dispatch event
+        id: event
         env:
-          INPUT_ACTOR: ${{ inputs.triggered_by }}
+          IS_CHAIN: ${{ github.event_name == 'repository_dispatch' }}
+          WD_TARGET: ${{ inputs.target }}
+          WD_FROM: ${{ inputs.from }}
+          WD_BUMP: ${{ inputs.bump }}
+          CP_TARGET: ${{ github.event.client_payload.target }}
+          CP_FROM: ${{ github.event.client_payload.from }}
+          CP_TRIGGERED_BY: ${{ github.event.client_payload.triggered_by }}
+          CP_RELEASE_TYPE: ${{ github.event.client_payload.release_type }}
           GH_ACTOR: ${{ github.actor }}
         run: |
-          ACTOR="${INPUT_ACTOR:-$GH_ACTOR}"
-          echo "actor=$ACTOR" >> "$GITHUB_OUTPUT"
+          if [[ "$IS_CHAIN" == "true" ]]; then
+            TARGET="$CP_TARGET"
+            FROM="$CP_FROM"
+            BUMP="patch"
+            TRIGGERED_BY="$CP_TRIGGERED_BY"
+            RELEASE_TYPE_INPUT="$CP_RELEASE_TYPE"
+            echo "Source: repository_dispatch (chain)"
+          else
+            TARGET="$WD_TARGET"
+            FROM="$WD_FROM"
+            BUMP="$WD_BUMP"
+            TRIGGERED_BY="$GH_ACTOR"
+            RELEASE_TYPE_INPUT=""    # auto-detect
+            echo "Source: workflow_dispatch (manual)"
+          fi
 
+          {
+            echo "target=$TARGET"
+            echo "from=$FROM"
+            echo "bump=$BUMP"
+            echo "triggered_by=$TRIGGERED_BY"
+            echo "release_type_input=$RELEASE_TYPE_INPUT"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Target=$TARGET · From=$FROM · Bump=$BUMP · By=$TRIGGERED_BY"
+
+      # -----------------------------------------------------------------
+      # Classify release type (auto-detect if not set by chain)
+      # -----------------------------------------------------------------
       - name: Classify release type
         id: release_type
         env:
-          INPUT_TYPE: ${{ inputs.release_type }}
-          FROM: ${{ inputs.from }}
-          TARGET: ${{ inputs.target }}
+          INPUT_TYPE: ${{ steps.event.outputs.release_type_input }}
+          FROM: ${{ steps.event.outputs.from }}
+          TARGET: ${{ steps.event.outputs.target }}
         run: |
           TYPE="$INPUT_TYPE"
 
-          # Auto-detect unless explicitly overridden (via chain or user input != regular)
-          if [[ "$TYPE" == "regular" || -z "$TYPE" ]]; then
+          if [[ -z "$TYPE" || "$TYPE" == "regular" ]]; then
             case "$TARGET" in
               stg)
-                # From the `from` branch prefix
                 case "$FROM" in
                   hotfix/*)  TYPE="hotfix" ;;
                   release/*) TYPE="cherrypick" ;;
@@ -146,7 +175,6 @@ jobs:
                 esac
                 ;;
               prod-build|prod-deploy)
-                # RC tag is lightweight → inspect which branch contains it
                 RC_SHA=$(git rev-parse --verify "refs/tags/$FROM" 2>/dev/null || true)
                 if [[ -n "$RC_SHA" ]]; then
                   BRANCHES=$(git branch -r --contains "$RC_SHA" 2>/dev/null || true)
@@ -154,8 +182,15 @@ jobs:
                     TYPE="hotfix"
                   elif echo "$BRANCHES" | grep -qE '^\s*origin/release/'; then
                     TYPE="cherrypick"
+                  else
+                    TYPE="regular"
                   fi
+                else
+                  TYPE="regular"
                 fi
+                ;;
+              *)
+                TYPE="regular"
                 ;;
             esac
           fi
@@ -163,10 +198,13 @@ jobs:
           echo "type=$TYPE" >> "$GITHUB_OUTPUT"
           echo "Release type: $TYPE (target=$TARGET, from=$FROM)"
 
+      # -----------------------------------------------------------------
+      # Resolve environment config
+      # -----------------------------------------------------------------
       - name: Resolve environment config
         id: env
         env:
-          TARGET: ${{ inputs.target }}
+          TARGET: ${{ steps.event.outputs.target }}
         run: |
           case "$TARGET" in
             dev)
@@ -189,12 +227,15 @@ jobs:
           echo "app_env=$APP_ENV" >> "$GITHUB_OUTPUT"
           echo "deployment_env=$DEPLOYMENT_ENV" >> "$GITHUB_OUTPUT"
 
+      # -----------------------------------------------------------------
+      # Compute version and image tag
+      # -----------------------------------------------------------------
       - name: Compute version and image tag
         id: version
         env:
-          TARGET: ${{ inputs.target }}
-          FROM: ${{ inputs.from }}
-          BUMP: ${{ inputs.bump }}
+          TARGET: ${{ steps.event.outputs.target }}
+          FROM: ${{ steps.event.outputs.from }}
+          BUMP: ${{ steps.event.outputs.bump }}
           RELEASE_TYPE: ${{ steps.release_type.outputs.type }}
         run: |
           VERSION=""
@@ -205,7 +246,6 @@ jobs:
           case "$TARGET" in
             dev)
               REF="${FROM:-main}"
-              # Fall back to origin/ prefix if ref not local
               RESOLVED=$(git rev-parse --verify "$REF" 2>/dev/null \
                 || git rev-parse --verify "origin/$REF" 2>/dev/null)
               if [[ -z "$RESOLVED" ]]; then
@@ -287,13 +327,15 @@ jobs:
 
           echo "Version: ${VERSION:-n/a} | Image: $IMAGE_TAG"
 
+      # -----------------------------------------------------------------
+      # Resolve commit SHA
+      # -----------------------------------------------------------------
       - name: Resolve commit SHA
         id: resolve
         env:
-          FROM: ${{ inputs.from }}
+          FROM: ${{ steps.event.outputs.from }}
         run: |
           REF="${FROM:-main}"
-          # Try local ref first, fall back to origin/ prefix
           SHA=$(git rev-parse --verify "$REF" 2>/dev/null \
             || git rev-parse --verify "origin/$REF" 2>/dev/null)
           if [[ -z "$SHA" ]]; then
@@ -305,8 +347,11 @@ jobs:
           echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
           echo "Resolved $REF → $SHA"
 
+      # -----------------------------------------------------------------
+      # Guards
+      # -----------------------------------------------------------------
       - name: "Guard · GA tag must not exist (prod-deploy)"
-        if: inputs.target == 'prod-deploy'
+        if: steps.event.outputs.target == 'prod-deploy'
         env:
           GA_TAG: ${{ steps.version.outputs.ga_tag }}
         run: |
@@ -316,7 +361,7 @@ jobs:
           fi
 
       - name: "Guard · rollback authorization"
-        if: inputs.target == 'rollback'
+        if: steps.event.outputs.target == 'rollback'
         env:
           ACTOR: ${{ github.actor }}
         run: |
@@ -341,7 +386,7 @@ jobs:
   build:
     name: "Build · ${{ needs.setup.outputs.image_tag }}"
     needs: setup
-    if: contains(fromJSON('["dev","stg","prod-build"]'), inputs.target)
+    if: contains(fromJSON('["dev","stg","prod-build"]'), needs.setup.outputs.target)
     runs-on: ubuntu-latest
     steps:
       - name: Simulate build
@@ -366,7 +411,7 @@ jobs:
   retag:
     name: "Retag · ${{ needs.setup.outputs.version }}-prod → ${{ needs.setup.outputs.image_tag }}"
     needs: setup
-    if: inputs.target == 'prod-deploy'
+    if: needs.setup.outputs.target == 'prod-deploy'
     runs-on: ubuntu-latest
     steps:
       - name: Simulate retag
@@ -379,12 +424,12 @@ jobs:
           echo "✅ [SIMULATED] Retagged successfully"
 
   # ================================================================
-  # ROLLBACK VERIFY — SIMULATED (always pass)
+  # ROLLBACK VERIFY — SIMULATED
   # ================================================================
   rollback-verify:
     name: "Rollback verify · ${{ needs.setup.outputs.image_tag }}"
     needs: setup
-    if: inputs.target == 'rollback'
+    if: needs.setup.outputs.target == 'rollback'
     runs-on: ubuntu-latest
     steps:
       - name: Simulate verify
@@ -402,12 +447,12 @@ jobs:
     if: |
       always()
       && needs.setup.result == 'success'
-      && contains(fromJSON('["dev","stg","prod-deploy","rollback"]'), inputs.target)
+      && contains(fromJSON('["dev","stg","prod-deploy","rollback"]'), needs.setup.outputs.target)
       && (
-        (inputs.target == 'dev' && needs.build.result == 'success') ||
-        (inputs.target == 'stg' && needs.build.result == 'success') ||
-        (inputs.target == 'prod-deploy' && needs.retag.result == 'success') ||
-        (inputs.target == 'rollback' && needs.rollback-verify.result == 'success')
+        (needs.setup.outputs.target == 'dev' && needs.build.result == 'success') ||
+        (needs.setup.outputs.target == 'stg' && needs.build.result == 'success') ||
+        (needs.setup.outputs.target == 'prod-deploy' && needs.retag.result == 'success') ||
+        (needs.setup.outputs.target == 'rollback' && needs.rollback-verify.result == 'success')
       )
     runs-on: ubuntu-latest
     steps:
@@ -421,7 +466,7 @@ jobs:
           echo "✅ [SIMULATED] Deployed to $APP_ENV cluster"
 
   # ================================================================
-  # TAG — create git tag (stg → RC rolling, prod-deploy → GA annotated)
+  # TAG
   # ================================================================
   tag:
     name: "Tag · create git tag"
@@ -429,7 +474,7 @@ jobs:
     if: |
       always()
       && needs.deploy.result == 'success'
-      && contains(fromJSON('["stg","prod-deploy"]'), inputs.target)
+      && contains(fromJSON('["stg","prod-deploy"]'), needs.setup.outputs.target)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -440,7 +485,7 @@ jobs:
 
       - name: Create and push tag
         env:
-          TARGET: ${{ inputs.target }}
+          TARGET: ${{ needs.setup.outputs.target }}
           COMMIT: ${{ needs.setup.outputs.commit_sha }}
           RC_TAG: ${{ needs.setup.outputs.rc_tag }}
           GA_TAG: ${{ needs.setup.outputs.ga_tag }}
@@ -476,8 +521,8 @@ jobs:
       always()
       && needs.setup.outputs.deployment_env != ''
       && (
-        (contains(fromJSON('["dev","stg","rollback"]'), inputs.target) && needs.deploy.result == 'success') ||
-        (inputs.target == 'prod-deploy' && needs.deploy.result == 'success' && needs.tag.result == 'success')
+        (contains(fromJSON('["dev","stg","rollback"]'), needs.setup.outputs.target) && needs.deploy.result == 'success') ||
+        (needs.setup.outputs.target == 'prod-deploy' && needs.deploy.result == 'success' && needs.tag.result == 'success')
       )
     runs-on: ubuntu-latest
     outputs:
@@ -544,7 +589,7 @@ jobs:
           echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
 
   # ================================================================
-  # DEPLOYMENT-RECORD
+  # DEPLOYMENT RECORD
   # ================================================================
   deployment-record:
     name: "Deployment · record to ${{ needs.setup.outputs.deployment_env }}"
@@ -598,7 +643,7 @@ jobs:
     needs: [setup, build]
     if: |
       always()
-      && inputs.target == 'prod-build'
+      && needs.setup.outputs.target == 'prod-build'
       && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -701,14 +746,14 @@ jobs:
           echo "::notice::Issue opened: $ISSUE_URL"
 
   # ================================================================
-  # PROD FINALIZE — publish Release + close issue
+  # PROD FINALIZE
   # ================================================================
   prod-finalize:
     name: "Finalize · publish Release + close issue"
     needs: [setup, deploy, tag, changelog, deployment-record]
     if: |
       always()
-      && inputs.target == 'prod-deploy'
+      && needs.setup.outputs.target == 'prod-deploy'
       && needs.deploy.result == 'success'
       && needs.tag.result == 'success'
     runs-on: ubuntu-latest
@@ -782,7 +827,7 @@ jobs:
     needs: [setup, deploy, deployment-record]
     if: |
       always()
-      && inputs.target == 'rollback'
+      && needs.setup.outputs.target == 'rollback'
       && needs.deploy.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -823,7 +868,7 @@ jobs:
           echo "::notice::Annotated both releases"
 
   # ================================================================
-  # NOTIFY — final status
+  # NOTIFY
   # ================================================================
   notify:
     name: "Notify · status"
@@ -866,7 +911,7 @@ jobs:
       - name: Log final status
         env:
           STATUS: ${{ steps.status.outputs.status }}
-          TARGET: ${{ inputs.target }}
+          TARGET: ${{ needs.setup.outputs.target }}
           VERSION: ${{ needs.setup.outputs.version }}
           IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
           RELEASE_TYPE: ${{ needs.setup.outputs.release_type }}
