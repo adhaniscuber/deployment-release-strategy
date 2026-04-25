@@ -2,7 +2,7 @@
 # Creates hotfix/vX.Y.Z or release/vX.Y.Z branch from latest GA tag.
 name: Prepare Branch
 
-run-name: "PREPARE-${{ inputs.kind == 'hotfix' && 'HOTFIX' || 'RELEASE' }} | base=${{ inputs.base != '' && inputs.base || 'auto' }} | by:${{ github.actor }}"
+run-name: "PREPARE-${{ inputs.kind == 'hotfix' && 'HOTFIX' || 'RELEASE' }} | base=${{ inputs.base != '' && inputs.base || 'auto' }}"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
