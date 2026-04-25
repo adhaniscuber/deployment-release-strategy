@@ -283,7 +283,7 @@ jobs:
               ;;
             prod-build)
               if ! [[ "$FROM" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc$ ]]; then
-                echo "::error::prod-build requires from=<RC tag>. Got: $FROM"
+                echo "::error::prod-build requires from=<RC tag> (e.g., v1.5.3-rc). Got: $FROM"
                 exit 1
               fi
               RC_TAG="$FROM"
@@ -292,7 +292,7 @@ jobs:
               ;;
             prod-deploy)
               if ! [[ "$FROM" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc$ ]]; then
-                echo "::error::prod-deploy requires from=<RC tag>. Got: $FROM"
+                echo "::error::prod-deploy requires from=<RC tag> (e.g., v1.5.3-rc). Got: $FROM"
                 exit 1
               fi
               RC_TAG="$FROM"
