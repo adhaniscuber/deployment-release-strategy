@@ -354,7 +354,16 @@ jobs:
           SHA=$(git rev-parse --verify "$REF^{commit}" 2>/dev/null \
             || git rev-parse --verify "origin/$REF^{commit}" 2>/dev/null)
           if [[ -z "$SHA" ]]; then
-            echo "::error::Cannot resolve ref: $REF"
+            echo "::error::Cannot resolve ref '$REF' to a commit."
+            echo ""
+            echo "Tried:"
+            echo "  • $REF (local)"
+            echo "  • origin/$REF (remote-tracking)"
+            echo ""
+            echo "Possible causes:"
+            echo "  • Branch/tag doesn't exist (typo? deleted?)"
+            echo "  • Branch only on remote, not fetched locally"
+            echo "  • SHA is malformed or doesn't exist in repo history"
             exit 1
           fi
           SHORT_SHA=$(git rev-parse --short=7 "$SHA")
@@ -414,7 +423,13 @@ jobs:
             exit 0
           fi
 
-          MAIN_SHA=$(git rev-parse origin/main 2>/dev/null || git rev-parse main)
+          # Always use origin/main (remote-tracked) — fail if missing rather than
+          # falling back to potentially-stale local main
+          MAIN_SHA=$(git rev-parse --verify origin/main 2>/dev/null)
+          if [[ -z "$MAIN_SHA" ]]; then
+            echo "::error::origin/main not found. Ensure 'fetch-depth: 0' in checkout step."
+            exit 1
+          fi
           if [[ "$MAIN_SHA" != "$STG_SHA" ]]; then
             AHEAD=$(git rev-list --count "${STG_SHA}..${MAIN_SHA}" 2>/dev/null || echo 0)
             if [[ "$AHEAD" -gt 0 ]]; then
