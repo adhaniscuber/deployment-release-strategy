@@ -2,7 +2,7 @@
 # Creates hotfix/vX.Y.Z or release/vX.Y.Z branch from latest GA tag.
 name: Prepare Branch
 
-run-name: "PREPARE-${{ inputs.kind == 'hotfix' && 'HOTFIX' || 'RELEASE' }} | base=${{ inputs.base != '' && inputs.base || 'auto' }} | by:${{ github.actor }}"
+run-name: "PREPARE-${{ inputs.kind == 'hotfix' && 'HOTFIX' || 'RELEASE' }} | base=${{ inputs.base != '' && inputs.base || 'auto' }}"
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -55,12 +55,13 @@ jobs:
             BASE="$INPUT_BASE"
             echo "✅ Base: $BASE (from input)"
           else
+            # Match plain semver AND legacy -prod suffix during migration window
             BASE=$(git tag -l 'v*' \
-              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+              | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-prod)?$' \
               | sort -V \
               | tail -1)
             if [[ -z "$BASE" ]]; then
-              echo "::error::No plain-semver GA tag found (vX.Y.Z pattern)"
+              echo "::error::No GA tag found (pattern: vX.Y.Z or vX.Y.Z-prod)"
               echo "Options: run with base=main, or base=<existing-tag>"
               exit 1
             fi

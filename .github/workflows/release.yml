@@ -15,26 +15,24 @@ run-name: >-
         github.event.client_payload.target == 'prod-deploy' && 'DEPLOY' || 'BUILD',
         github.event.client_payload.release_type == 'cherrypick' && ' | mode: CHERRYPICK' || '')
     || inputs.target == 'rollback' &&
-      format('ROLLBACK | from={0} | by:{1} | action: ROLLBACK',
-        inputs.from, github.actor)
+      format('ROLLBACK | from={0} | action: ROLLBACK', inputs.from)
     || (inputs.target == 'stg' && startsWith(inputs.from, 'hotfix/')) &&
-      format('HOTFIX | from={0} | by:{1}',
-        inputs.from, github.actor)
+      format('HOTFIX | from={0} | tag={1}-rc',
+        inputs.from,
+        replace(inputs.from, 'hotfix/', ''))
     || (inputs.target == 'stg' && startsWith(inputs.from, 'release/')) &&
-      format('STG | from={0} | by:{1} | mode: CHERRYPICK',
-        inputs.from, github.actor)
+      format('STG | from={0} | tag={1}-rc | mode: CHERRYPICK',
+        inputs.from,
+        replace(inputs.from, 'release/', ''))
     || inputs.target == 'dev' &&
-      format('DEV | from={0} | by:{1}',
-        inputs.from != '' && inputs.from || 'main', github.actor)
+      format('DEV | from={0}', inputs.from != '' && inputs.from || 'main')
     || inputs.target == 'stg' &&
-      format('STG | from={0} | by:{1}',
-        inputs.from != '' && inputs.from || 'main', github.actor)
+      format('STG | from={0} | tag=auto-rc',
+        inputs.from != '' && inputs.from || 'main')
     || inputs.target == 'prod-build' &&
-      format('PROD | from={0} | by:{1} | action: BUILD',
-        inputs.from, github.actor)
+      format('PROD | from={0} | action: BUILD', inputs.from)
     || inputs.target == 'prod-deploy' &&
-      format('PROD | from={0} | by:{1} | action: DEPLOY',
-        inputs.from, github.actor)
+      format('PROD | from={0} | action: DEPLOY', inputs.from)
     || 'Release run'
   }}
 
@@ -258,18 +256,22 @@ jobs:
             stg)
               case "$RELEASE_TYPE" in
                 hotfix|cherrypick)
-                  VERSION=$(echo "$FROM" | sed -E 's#^(hotfix|release)/##')
+                  VERSION=$(echo "$FROM" | sed -E 's|^(hotfix|release)/||')
                   if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                     echo "::error::Cannot parse version from branch: $FROM"
                     exit 1
                   fi
                   ;;
                 *)
+                  # Match plain semver (vX.Y.Z) AND legacy -prod suffix during migration.
+                  # After first new release in plain semver, sort -V picks plain over legacy.
                   LATEST_GA=$(git tag -l 'v*' \
-                    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-prod)?$' \
                     | sort -V \
                     | tail -1)
                   LATEST_GA="${LATEST_GA:-v0.0.0}"
+                  # Strip -prod suffix if present (legacy convention)
+                  LATEST_GA="${LATEST_GA%-prod}"
                   SEMVER="${LATEST_GA#v}"
                   MAJOR=$(echo "$SEMVER" | cut -d. -f1)
                   MINOR=$(echo "$SEMVER" | cut -d. -f2)
