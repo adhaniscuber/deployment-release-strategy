@@ -17,9 +17,13 @@ git pull
 ```
 
 **1. GitHub repo settings:**
-- [ ] Settings → Actions → General → Workflow permissions = **"Read and write permissions"**
-- [ ] **"Allow GitHub Actions to create and approve pull requests"** = checked
-- [ ] `.github/approvers.yml` production list contains `adhaniscuber`
+- [ ] Settings → Actions → General → Workflow permissions = **either OK**:
+  - "Read and write permissions" (simpler, more permissive)
+  - "Read repository contents and packages permissions" (restricted, recommended — workflows declare explicit `permissions:`)
+- [ ] **"Allow GitHub Actions to create and approve pull requests"** = ✅ checked
+- [ ] `.github/approvers.yml` production list contains your GitHub login
+
+> Note: All v6 workflows declare explicit `permissions:` blocks, so restricted default works fine. The restricted option is more secure (no accidental write for unrelated workflows added later).
 
 **2. Clean state (optional, kalau mau fresh start):**
 
