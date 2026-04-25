@@ -48,7 +48,7 @@ on:
           - prod-deploy
           - rollback
       from:
-        description: "Source ref. dev/stg: branch/SHA. prod-build/prod-deploy: RC tag. rollback: GA tag."
+        description: "Source ref. dev/stg: branch/SHA (default: main). prod-build/prod-deploy: RC tag (leave blank = latest RC auto-detected). rollback: GA tag (required)."
         required: false
         type: string
         default: ""
@@ -134,6 +134,19 @@ jobs:
             TRIGGERED_BY="$GH_ACTOR"
             RELEASE_TYPE_INPUT=""    # auto-detect
             echo "Source: workflow_dispatch (manual)"
+          fi
+
+          # ─── Auto-detect latest RC tag if from empty for prod targets ───
+          # Convenience: engineer doesn't have to type tag for typical case.
+          # 99% case prod-build/prod-deploy uses the latest RC (just cut from stg).
+          # To override, engineer can specify explicit tag.
+          if [[ -z "$FROM" ]] && [[ "$TARGET" == "prod-build" || "$TARGET" == "prod-deploy" ]]; then
+            FROM=$(git tag -l 'v*-rc' | sort -V | tail -1)
+            if [[ -z "$FROM" ]]; then
+              echo "::error::No RC tag found. Cut stg first (target=stg) to create an RC tag, or specify from=<RC tag> manually."
+              exit 1
+            fi
+            echo "::notice::Auto-detected latest RC tag: $FROM (override by setting 'from' input)"
           fi
 
           {
@@ -361,6 +374,78 @@ jobs:
             echo "::error::GA tag $GA_TAG already exists."
             exit 1
           fi
+
+      - name: "Guard · stg freshness check (prod-build)"
+        if: steps.event.outputs.target == 'prod-build'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RC_SHA: ${{ steps.resolve.outputs.commit_sha }}
+          RC_TAG: ${{ steps.event.outputs.from }}
+          RELEASE_TYPE: ${{ steps.release_type.outputs.type }}
+        run: |
+          # Get latest staging deployment SHA
+          STG_SHA=$(gh api \
+            "repos/${{ github.repository }}/deployments?environment=staging&per_page=1" \
+            --jq '.[0].sha // ""')
+
+          # Check 1: stg deployment must exist
+          if [[ -z "$STG_SHA" ]]; then
+            echo "::error::No staging deployment found. Cut stg first before prod-build:"
+            echo ""
+            echo "  Actions → Release → target=stg → Run"
+            exit 1
+          fi
+
+          # Check 2: RC tag commit must match latest stg deployment
+          if [[ "$STG_SHA" != "$RC_SHA" ]]; then
+            echo "::error::RC tag commit doesn't match latest stg deployment"
+            echo ""
+            echo "  RC tag (${RC_TAG}) commit: ${RC_SHA:0:7}"
+            echo "  Last stg deploy SHA:       ${STG_SHA:0:7}"
+            echo ""
+            echo "Re-cut stg to align: Actions → Release → target=stg → Run"
+            exit 1
+          fi
+
+          # Check 3: main vs stg — only for regular releases
+          # Hotfix and cherry-pick deliberately diverge from main, so this check is skipped.
+          if [[ "$RELEASE_TYPE" == "hotfix" || "$RELEASE_TYPE" == "cherrypick" ]]; then
+            echo "✅ ${RELEASE_TYPE} release — main vs stg check skipped (branch-tracked)"
+            exit 0
+          fi
+
+          MAIN_SHA=$(git rev-parse origin/main 2>/dev/null || git rev-parse main)
+          if [[ "$MAIN_SHA" != "$STG_SHA" ]]; then
+            AHEAD=$(git rev-list --count "${STG_SHA}..${MAIN_SHA}" 2>/dev/null || echo 0)
+            if [[ "$AHEAD" -gt 0 ]]; then
+              {
+                echo "## 🛑 Stale staging — prod-build blocked"
+                echo ""
+                echo "main has **${AHEAD} commits** past last staging deployment."
+                echo "Production should not deploy stale RC."
+                echo ""
+                echo "| | |"
+                echo "|---|---|"
+                echo "| RC tag | \`${RC_TAG}\` (${RC_SHA:0:7}) |"
+                echo "| Last stg deploy | ${STG_SHA:0:7} |"
+                echo "| main HEAD | ${MAIN_SHA:0:7} (+${AHEAD} commits) |"
+                echo ""
+                echo "### Fix"
+                echo ""
+                echo "Cut stg again to include latest commits:"
+                echo ""
+                echo "    Actions → Release → target=stg → Run"
+                echo ""
+                echo "Then retry prod-build."
+              } >> "$GITHUB_STEP_SUMMARY"
+
+              echo "::error::main has ${AHEAD} commits past last staging deployment"
+              echo "Cut stg first: Actions → Release → target=stg → Run"
+              exit 1
+            fi
+          fi
+
+          echo "✅ stg deployment is fresh — prod-build safe to proceed"
 
       - name: "Guard · rollback authorization"
         if: steps.event.outputs.target == 'rollback'
