@@ -263,11 +263,15 @@ jobs:
                   fi
                   ;;
                 *)
+                  # Match plain semver (vX.Y.Z) AND legacy -prod suffix during migration.
+                  # After first new release in plain semver, sort -V picks plain over legacy.
                   LATEST_GA=$(git tag -l 'v*' \
-                    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+                    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-prod)?$' \
                     | sort -V \
                     | tail -1)
                   LATEST_GA="${LATEST_GA:-v0.0.0}"
+                  # Strip -prod suffix if present (legacy convention)
+                  LATEST_GA="${LATEST_GA%-prod}"
                   SEMVER="${LATEST_GA#v}"
                   MAJOR=$(echo "$SEMVER" | cut -d. -f1)
                   MINOR=$(echo "$SEMVER" | cut -d. -f2)
