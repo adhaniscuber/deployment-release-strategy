@@ -306,8 +306,9 @@ jobs:
               IMAGE_TAG="${VERSION}-arm"
               ;;
             rollback)
-              if ! [[ "$FROM" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                echo "::error::rollback requires from=<GA tag>. Got: $FROM"
+              # Accept plain semver AND legacy -prod suffix (migration window)
+              if ! [[ "$FROM" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-prod)?$ ]]; then
+                echo "::error::rollback requires from=<GA tag> (vX.Y.Z or vX.Y.Z-prod). Got: $FROM"
                 exit 1
               fi
               if ! git rev-parse --verify "refs/tags/$FROM" >/dev/null 2>&1; then
@@ -316,6 +317,7 @@ jobs:
               fi
               VERSION="$FROM"
               GA_TAG="$VERSION"
+              # Image tag matches the git tag — legacy v3.2.1-prod git tag → v3.2.1-prod-arm image
               IMAGE_TAG="${VERSION}-arm"
               ;;
           esac
