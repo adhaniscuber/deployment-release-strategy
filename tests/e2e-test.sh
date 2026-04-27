@@ -70,8 +70,9 @@ dispatch_and_wait_for_run() {
     sleep 2
     elapsed=$((elapsed+2))
   done
+  # Caller checks for "0" sentinel; return 0 so `var=$(...)` under `set -e`
+  # doesn't abort the script on timeout.
   echo "0"
-  return 1
 }
 
 # Wait for run to complete, return status (success/failure/cancelled)
@@ -89,7 +90,6 @@ wait_for_completion() {
     elapsed=$((elapsed+POLL_INTERVAL))
   done
   echo "timeout"
-  return 1
 }
 
 # Wait for chain-dispatched run (released after on-approve dispatch)
@@ -104,7 +104,9 @@ wait_for_new_run_after() {
     run_id=$(echo "$run_data" | jq -r '.databaseId')
     created_at=$(echo "$run_data" | jq -r '.createdAt')
     local created_ts
-    created_ts=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$created_at" +%s 2>/dev/null || \
+    # NOTE: -u is critical on macOS — without it, `date -j -f` parses the
+    # timestamp as local time even though the input has a Z suffix.
+    created_ts=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$created_at" +%s 2>/dev/null || \
                  date -d "$created_at" +%s 2>/dev/null || echo 0)
     if [[ "$created_ts" -gt "$after_ts" ]]; then
       echo "$run_id"
@@ -114,7 +116,6 @@ wait_for_new_run_after() {
     elapsed=$((elapsed+2))
   done
   echo "0"
-  return 1
 }
 
 assert_tag_exists() {
