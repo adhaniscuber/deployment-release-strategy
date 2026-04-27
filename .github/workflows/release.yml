@@ -264,7 +264,7 @@ jobs:
             stg)
               case "$RELEASE_TYPE" in
                 hotfix|cherrypick)
-                  VERSION=$(echo "$FROM" | sed -E 's|^(hotfix|release)/||')
+                  VERSION=$(echo "$FROM" | sed -E 's#^(hotfix|release)/##')
                   if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
                     echo "::error::Cannot parse version from branch: $FROM"
                     exit 1

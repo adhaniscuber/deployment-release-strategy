@@ -484,13 +484,20 @@ main() {
   cleanup
   add_dummy_commits 3
 
+  # Each drill is wrapped with `|| true` so a failure in one drill doesn't
+  # short-circuit the suite via set -e — every drill should run, and the
+  # summary at the end reports cumulative pass/fail across all drills.
   case "$ONLY" in
-    "")          drill1_regular_cycle; drill2_hotfix; drill3_rollback; drill4_cherrypick; drill5_negative_tests ;;
-    drill1)      drill1_regular_cycle ;;
-    drill2)      drill2_hotfix ;;
-    drill3)      drill3_rollback ;;
-    drill4)      drill4_cherrypick ;;
-    drill5)      drill5_negative_tests ;;
+    "")          drill1_regular_cycle || true
+                 drill2_hotfix         || true
+                 drill3_rollback       || true
+                 drill4_cherrypick     || true
+                 drill5_negative_tests || true ;;
+    drill1)      drill1_regular_cycle  || true ;;
+    drill2)      drill2_hotfix         || true ;;
+    drill3)      drill3_rollback       || true ;;
+    drill4)      drill4_cherrypick     || true ;;
+    drill5)      drill5_negative_tests || true ;;
     *)           echo "Unknown drill: $ONLY"; exit 1 ;;
   esac
 
