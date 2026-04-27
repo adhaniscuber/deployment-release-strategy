@@ -347,8 +347,10 @@ drill2_hotfix() {
   assert_branch_exists "hotfix/v0.0.2"
 
   log "Step 2.2: Push fix commit to hotfix branch"
-  git fetch --quiet 2>/dev/null || true
-  git checkout hotfix/v0.0.2 2>/dev/null
+  git fetch --prune --quiet 2>/dev/null || true
+  git fetch origin hotfix/v0.0.2 --quiet 2>/dev/null || true
+  # Force-reset to remote to avoid divergence from a stale local branch.
+  git checkout -B hotfix/v0.0.2 origin/hotfix/v0.0.2 2>/dev/null
   echo "" >> README.md
   git -c user.name="$(git config user.name || echo bot)" \
       -c user.email="$(git config user.email || echo bot@example.com)" \
@@ -412,10 +414,15 @@ drill4_cherrypick() {
   assert_branch_exists "release/v0.1.0"
 
   log "Step 4.2: Cherry-pick a commit"
-  git fetch --quiet 2>/dev/null || true
+  git fetch --prune --quiet 2>/dev/null || true
   add_dummy_commits 1
   local pick_sha; pick_sha=$(git rev-parse HEAD)
-  git checkout release/v0.1.0 2>/dev/null
+  # Force-reset local release/v0.1.0 to whatever prepare-branch just put on
+  # the remote — a stale local branch left over from a previous session
+  # would otherwise diverge and cause the push to be non-fast-forward
+  # rejected, leaving the test running against the wrong tree.
+  git fetch origin release/v0.1.0 --quiet 2>/dev/null || true
+  git checkout -B release/v0.1.0 origin/release/v0.1.0 2>/dev/null
   if ! git -c user.name="$(git config user.name || echo bot)" \
           -c user.email="$(git config user.email || echo bot@example.com)" \
           cherry-pick "$pick_sha"; then
