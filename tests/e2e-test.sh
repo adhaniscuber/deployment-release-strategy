@@ -222,7 +222,8 @@ cleanup() {
   gh release list --json tagName --jq '.[].tagName' \
     | xargs -I {} gh release delete {} --yes --cleanup-tag 2>/dev/null || true
   # Delete branches (prune stale refs first; awk strips whitespace cleanly)
-  git fetch --prune --quiet
+  # Tolerant of transient SSH/network blips — cleanup must not abort the run.
+  git fetch --prune --quiet 2>/dev/null || true
   git branch -r | awk '/origin\/(hotfix|release)\//{sub(/^[[:space:]]*origin\//,""); print}' \
     | xargs -I {} git push origin --delete {} 2>/dev/null || true
   # Delete deployments (must set inactive first)
@@ -257,6 +258,18 @@ cleanup() {
   ok "Cleanup done"
 }
 
+# Retry a git push up to 3 times — SSH connections to github.com flake.
+git_push_retry() {
+  local attempt=1
+  while (( attempt <= 3 )); do
+    if git push "$@"; then return 0; fi
+    echo "  ${YELLOW}~${RESET} git push failed (attempt $attempt/3), retrying in 5s..."
+    sleep 5
+    attempt=$((attempt+1))
+  done
+  return 1
+}
+
 add_dummy_commits() {
   local count="${1:-3}"
   for i in $(seq 1 "$count"); do
@@ -265,7 +278,7 @@ add_dummy_commits() {
         -c user.email="$(git config user.email || echo bot@example.com)" \
         commit -am "test: e2e dummy commit $i ($(date +%s))"
   done
-  git push origin main
+  git_push_retry origin main
   ok "added $count dummy commits"
 }
 
@@ -338,7 +351,7 @@ drill2_hotfix() {
   git -c user.name="$(git config user.name || echo bot)" \
       -c user.email="$(git config user.email || echo bot@example.com)" \
       commit -am "fix: e2e hotfix commit"
-  git push origin hotfix/v0.0.2
+  git_push_retry origin hotfix/v0.0.2
   git checkout main 2>/dev/null
   ok "pushed hotfix commit"
 
@@ -404,7 +417,7 @@ drill4_cherrypick() {
   git -c user.name="$(git config user.name || echo bot)" \
       -c user.email="$(git config user.email || echo bot@example.com)" \
       cherry-pick "$pick_sha" || true
-  git push origin release/v0.1.0
+  git_push_retry origin release/v0.1.0
   git checkout main 2>/dev/null
   ok "cherry-picked commit $pick_sha"
 
