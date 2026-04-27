@@ -221,9 +221,9 @@ cleanup() {
   # Delete releases
   gh release list --json tagName --jq '.[].tagName' \
     | xargs -I {} gh release delete {} --yes --cleanup-tag 2>/dev/null || true
-  # Delete branches
-  git fetch --quiet
-  git branch -r | grep -E 'origin/(hotfix|release)/' | sed 's|origin/||' \
+  # Delete branches (prune stale refs first; awk strips whitespace cleanly)
+  git fetch --prune --quiet
+  git branch -r | awk '/origin\/(hotfix|release)\//{sub(/^[[:space:]]*origin\//,""); print}' \
     | xargs -I {} git push origin --delete {} 2>/dev/null || true
   # Delete deployments (must set inactive first)
   log "  Deleting GitHub Deployments..."
@@ -234,6 +234,26 @@ cleanup() {
     gh api -X DELETE "repos/$REPO/deployments/$deploy_id" >/dev/null 2>&1 && count=$((count+1)) || true
   done < <(gh api "repos/$REPO/deployments?per_page=100" --paginate --jq '.[].id' 2>/dev/null)
   [[ $count -gt 0 ]] && echo "    ✓ Deleted $count deployments" || echo "    (no deployments to delete)"
+
+  # Cancel any in-progress runs, then delete all workflow runs
+  log "  Cancelling in-progress workflow runs..."
+  while read -r run_id; do
+    [[ -z "$run_id" ]] && continue
+    gh run cancel "$run_id" >/dev/null 2>&1 || true
+  done < <(gh run list --status in_progress --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null)
+  while read -r run_id; do
+    [[ -z "$run_id" ]] && continue
+    gh run cancel "$run_id" >/dev/null 2>&1 || true
+  done < <(gh run list --status queued --limit 50 --json databaseId --jq '.[].databaseId' 2>/dev/null)
+
+  log "  Deleting workflow runs..."
+  count=0
+  while read -r run_id; do
+    [[ -z "$run_id" ]] && continue
+    gh api -X DELETE "repos/$REPO/actions/runs/$run_id" >/dev/null 2>&1 && count=$((count+1)) || true
+  done < <(gh run list --limit 200 --json databaseId --jq '.[].databaseId' 2>/dev/null)
+  [[ $count -gt 0 ]] && echo "    ✓ Deleted $count workflow runs" || echo "    (no workflow runs to delete)"
+
   ok "Cleanup done"
 }
 
