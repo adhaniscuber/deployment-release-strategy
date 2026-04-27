@@ -119,7 +119,9 @@ wait_for_new_run_after() {
 }
 
 assert_tag_exists() {
-  git fetch --tags --quiet
+  # --force: rolling RC tags get reused; without it fetch errors with set -e.
+  # `|| true`: a transient SSH blip shouldn't abort the assertion.
+  git fetch --tags --force --quiet 2>/dev/null || true
   if git rev-parse --verify "refs/tags/$1" >/dev/null 2>&1; then
     ok "tag '$1' exists"
   else
@@ -128,7 +130,7 @@ assert_tag_exists() {
 }
 
 assert_tag_missing() {
-  git fetch --tags --quiet
+  git fetch --tags --force --quiet 2>/dev/null || true
   if git rev-parse --verify "refs/tags/$1" >/dev/null 2>&1; then
     fail "tag '$1' should NOT exist (but it does)"
   else
@@ -137,7 +139,7 @@ assert_tag_missing() {
 }
 
 assert_branch_exists() {
-  git fetch --quiet
+  git fetch --quiet 2>/dev/null || true
   if git ls-remote --heads origin "$1" | grep -q "$1"; then
     ok "branch '$1' exists"
   else
@@ -345,7 +347,7 @@ drill2_hotfix() {
   assert_branch_exists "hotfix/v0.0.2"
 
   log "Step 2.2: Push fix commit to hotfix branch"
-  git fetch --quiet
+  git fetch --quiet 2>/dev/null || true
   git checkout hotfix/v0.0.2 2>/dev/null
   echo "" >> README.md
   git -c user.name="$(git config user.name || echo bot)" \
