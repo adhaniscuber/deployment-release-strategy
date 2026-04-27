@@ -1023,6 +1023,8 @@ jobs:
           TARGET: ${{ needs.setup.outputs.target }}
           VERSION: ${{ needs.setup.outputs.version }}
           IMAGE_TAG: ${{ needs.setup.outputs.image_tag }}
+          RC_TAG: ${{ needs.setup.outputs.rc_tag }}
+          GA_TAG: ${{ needs.setup.outputs.ga_tag }}
           RELEASE_TYPE: ${{ needs.setup.outputs.release_type }}
           TRIGGERED_BY: ${{ needs.setup.outputs.triggered_by }}
           COMMIT_COUNT: ${{ needs.changelog.outputs.count }}
@@ -1039,12 +1041,20 @@ jobs:
             EMOJI="❌"; ACTION="FAILED: $TARGET"
           fi
 
+          # Git tag created/used by this run (none for dev / prod-build)
+          case "$TARGET" in
+            stg)                  TAG_ROW="\`${RC_TAG:-n/a}\` (rolling)" ;;
+            prod-deploy|rollback) TAG_ROW="\`${GA_TAG:-n/a}\` (annotated)" ;;
+            *)                    TAG_ROW="—" ;;
+          esac
+
           {
             echo "## $EMOJI $ACTION"
             echo ""
             echo "| Field | Value |"
             echo "|---|---|"
             echo "| Version | \`${VERSION:-n/a}\` |"
+            echo "| Git tag | $TAG_ROW |"
             echo "| Image | \`${IMAGE_TAG:-n/a}\` |"
             echo "| Release type | \`${RELEASE_TYPE:-regular}\` |"
             echo "| Triggered by | @${TRIGGERED_BY:-unknown} |"
