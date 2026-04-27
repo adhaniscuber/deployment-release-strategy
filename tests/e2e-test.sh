@@ -224,6 +224,15 @@ cleanup() {
   git fetch --quiet
   git branch -r | grep -E 'origin/(hotfix|release)/' | sed 's|origin/||' \
     | xargs -I {} git push origin --delete {} 2>/dev/null || true
+  # Delete deployments (must set inactive first)
+  log "  Deleting GitHub Deployments..."
+  local count=0
+  while read -r deploy_id; do
+    [[ -z "$deploy_id" ]] && continue
+    gh api -X POST "repos/$REPO/deployments/$deploy_id/statuses" -f state=inactive >/dev/null 2>&1 || true
+    gh api -X DELETE "repos/$REPO/deployments/$deploy_id" >/dev/null 2>&1 && count=$((count+1)) || true
+  done < <(gh api "repos/$REPO/deployments?per_page=100" --paginate --jq '.[].id' 2>/dev/null)
+  [[ $count -gt 0 ]] && echo "    ✓ Deleted $count deployments" || echo "    (no deployments to delete)"
   ok "Cleanup done"
 }
 

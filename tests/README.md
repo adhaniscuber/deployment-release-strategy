@@ -132,7 +132,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-⚠️ Caution: e2e-test creates real tags/releases/deployments. CI run akan numpuk artifacts. Cleanup ensures fresh state but Deployments tetap accumulate (can't bulk-delete).
+⚠️ Caution: e2e-test creates real tags/releases/deployments. Cleanup ensures fresh state via API (deployments now also bulk-deleted via inactive→delete pattern).
 
 ## Troubleshooting
 

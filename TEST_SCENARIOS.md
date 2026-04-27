@@ -515,8 +515,9 @@ History per env memperlihatkan progression timeline.
 
 ```bash
 cd /Users/adhan/ctlyst/github-deployments-demo
+REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
-# Delete tags (kecuali kalau mau keep history)
+# Delete tags
 git tag -l 'v*' | xargs -I {} git push origin --delete {}
 git tag -l 'v*' | xargs git tag -d 2>/dev/null
 
@@ -532,7 +533,13 @@ gh issue list --label pending-prod-deploy --json number --jq '.[].number' \
 gh release list --json tagName --jq '.[].tagName' \
   | xargs -I {} gh release delete {} --yes --cleanup-tag 2>/dev/null
 
-# Note: Deployments cannot be bulk-deleted via API. They remain as history.
+# Delete all GitHub Deployments
+# (must set state=inactive before delete is allowed)
+gh api "repos/$REPO/deployments?per_page=100" --paginate --jq '.[].id' | while read -r DEPLOY_ID; do
+  gh api -X POST "repos/$REPO/deployments/$DEPLOY_ID/statuses" -f state=inactive >/dev/null 2>&1
+  gh api -X DELETE "repos/$REPO/deployments/$DEPLOY_ID" >/dev/null
+done
+echo "Deployments deleted."
 ```
 
 ---
